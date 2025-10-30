@@ -6,9 +6,10 @@ langchain-huggingface
 faiss-cpu
 sentence-transformers
 pdfplumber
-PyMuPDF
+pymupdf
 easyocr
 Pillow
 torch
 torchvision
 numpy
+opencv-python-headless
