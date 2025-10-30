@@ -5,9 +5,9 @@ import fitz  # PyMuPDF
 import easyocr
 from PIL import Image
 import numpy as np
-from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import HuggingFaceEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_text_splitters import CharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
 st.title("📄 Document Search with OCR and FAISS")
 
@@ -19,24 +19,22 @@ if uploaded_file is not None:
         if uploaded_file.type == "text/plain":
             raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
         elif uploaded_file.type == "application/pdf":
-            # Read PDF bytes
             pdf_bytes = uploaded_file.read()
-            # Try extracting with pdfplumber (works for digital PDFs)
+            # Try extracting text with pdfplumber
             with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
                 for page in pdf.pages:
                     page_text = page.extract_text()
                     if page_text:
                         raw_text += page_text + "\n"
                     else:
-                        # Page likely scanned image: use PyMuPDF + EasyOCR
-                        # Render page to image at 150 DPI
-                        pix = fitz.open(stream=pdf_bytes, filetype="pdf")[page.page_number-1].get_pixmap(dpi=150)
+                        # Use OCR for scanned PDFs
+                        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+                        page = doc.load_page(page.page_number - 1)
+                        pix = page.get_pixmap(dpi=150)
                         img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                        # Initialize EasyOCR reader (cache the reader for speed)
-                        reader = easyocr.Reader(['en'], gpu=False)  # adjust languages as needed
+                        reader = easyocr.Reader(['en'], gpu=False)
                         result = reader.readtext(np.array(img), detail=0)
-                        page_text = " ".join(result) if result else ""
-                        raw_text += page_text + "\n"
+                        raw_text += " ".join(result) + "\n"
         else:
             st.error("Unsupported file type.")
             st.stop()
@@ -49,7 +47,7 @@ if uploaded_file is not None:
         st.error(f"Error extracting text: {e}")
         st.stop()
 
-    # Split the text into chunks for embedding
+    # Split text
     try:
         text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
         chunks = text_splitter.split_text(raw_text)
@@ -57,7 +55,7 @@ if uploaded_file is not None:
         st.error(f"Error splitting text: {e}")
         st.stop()
 
-    # Generate embeddings and build FAISS index
+    # Embed and index
     try:
         embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
         faiss_index = FAISS.from_texts(chunks, embeddings)
@@ -65,7 +63,7 @@ if uploaded_file is not None:
         st.error(f"Error creating embeddings or FAISS index: {e}")
         st.stop()
 
-    # Query input
+    # Query
     query = st.text_input("Enter a query:")
     if query:
         try:
