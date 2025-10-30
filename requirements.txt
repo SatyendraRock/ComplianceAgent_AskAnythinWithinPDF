@@ -1,15 +1,10 @@
+# requirements.txt
 streamlit
-langchain
-langchain-community
-langchain-text-splitters
-langchain-huggingface
-faiss-cpu
-sentence-transformers
 pdfplumber
-pymupdf
+PyMuPDF
 easyocr
-Pillow
-torch
-torchvision
+langchain
+sentence-transformers
+faiss-cpu
 numpy
-opencv-python-headless
+Pillow
