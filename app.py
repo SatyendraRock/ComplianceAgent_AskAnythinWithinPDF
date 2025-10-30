@@ -1,86 +1,80 @@
 import streamlit as st
-import io
-import numpy as np
-from PIL import Image
+from io import BytesIO
+import pdfplumber
 import fitz  # PyMuPDF
 import easyocr
-import pdfplumber
-from langchain_text_splitters import CharacterTextSplitter
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
+from PIL import Image
+import numpy as np
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import HuggingFaceEmbeddings
+from langchain.vectorstores import FAISS
 
-st.set_page_config(page_title="AI Compliance Agent", layout="centered")
-st.title("🛡️ SATYENDRA AI Compliance Agent")
-st.write("Upload a .txt or .pdf file (even scanned PDFs) and ask questions about it!")
+st.title("📄 Document Search with OCR and FAISS")
 
-uploaded_file = st.file_uploader("📄 Upload your document", type=["txt", "pdf"])
-
-# ----------- TEXT EXTRACTION ------------
-def extract_text_from_pdf(file_bytes):
-    text = ""
+uploaded_file = st.file_uploader("Upload a .txt or .pdf file", type=["txt", "pdf"])
+if uploaded_file is not None:
     try:
-        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
-            for page in pdf.pages:
-                page_text = page.extract_text() or ""
-                text += page_text
-    except Exception as e:
-        st.warning(f"Text extraction failed: {e}")
-    return text.strip()
+        # Read text content based on file type
+        raw_text = ""
+        if uploaded_file.type == "text/plain":
+            raw_text = uploaded_file.read().decode("utf-8", errors="ignore")
+        elif uploaded_file.type == "application/pdf":
+            # Read PDF bytes
+            pdf_bytes = uploaded_file.read()
+            # Try extracting with pdfplumber (works for digital PDFs)
+            with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+                for page in pdf.pages:
+                    page_text = page.extract_text()
+                    if page_text:
+                        raw_text += page_text + "\n"
+                    else:
+                        # Page likely scanned image: use PyMuPDF + EasyOCR
+                        # Render page to image at 150 DPI
+                        pix = fitz.open(stream=pdf_bytes, filetype="pdf")[page.page_number-1].get_pixmap(dpi=150)
+                        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                        # Initialize EasyOCR reader (cache the reader for speed)
+                        reader = easyocr.Reader(['en'], gpu=False)  # adjust languages as needed
+                        result = reader.readtext(np.array(img), detail=0)
+                        page_text = " ".join(result) if result else ""
+                        raw_text += page_text + "\n"
+        else:
+            st.error("Unsupported file type.")
+            st.stop()
 
-def extract_text_with_ocr(file_bytes):
-    st.info("🧠 Detected scanned PDF — running OCR (may take a minute)...")
-    text = ""
+        if not raw_text.strip():
+            st.error("No extractable text found in the document.")
+            st.stop()
+
+    except Exception as e:
+        st.error(f"Error extracting text: {e}")
+        st.stop()
+
+    # Split the text into chunks for embedding
     try:
-        pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
-        reader = easyocr.Reader(["en"], gpu=False)
-        for page_num in range(len(pdf_document)):
-            page = pdf_document.load_page(page_num)
-            pix = page.get_pixmap(dpi=200)
-            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-            result = reader.readtext(np.array(img), detail=0)
-            text += " ".join(result) + "\n"
+        text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=100)
+        chunks = text_splitter.split_text(raw_text)
     except Exception as e:
-        st.error(f"OCR failed: {e}")
-    return text.strip()
+        st.error(f"Error splitting text: {e}")
+        st.stop()
 
-# ----------- TEXT PROCESSING ------------
-def process_text(text):
-    splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
-    docs = splitter.create_documents([text])
-    if not docs:
-        raise ValueError("No text chunks to embed. (File may be empty or OCR failed.)")
+    # Generate embeddings and build FAISS index
+    try:
+        embeddings = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+        faiss_index = FAISS.from_texts(chunks, embeddings)
+    except Exception as e:
+        st.error(f"Error creating embeddings or FAISS index: {e}")
+        st.stop()
 
-    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
-    vectorstore = FAISS.from_documents(docs, embedding_model)
-    return vectorstore.as_retriever()
-
-# ----------- APP LOGIC ------------
-if uploaded_file:
-    file_bytes = uploaded_file.read()
-    file_ext = uploaded_file.name.split(".")[-1].lower()
-
-    extracted_text = ""
-    if file_ext == "txt":
-        extracted_text = file_bytes.decode("utf-8", errors="ignore").strip()
-    elif file_ext == "pdf":
-        extracted_text = extract_text_from_pdf(file_bytes)
-        if not extracted_text:
-            extracted_text = extract_text_with_ocr(file_bytes)
-
-    if not extracted_text:
-        st.error("❌ No readable text found in this file. Try uploading a different one.")
-    else:
+    # Query input
+    query = st.text_input("Enter a query:")
+    if query:
         try:
-            retriever = process_text(extracted_text)
-            query = st.text_input("💬 Ask a question about your document:")
-            if query:
-                results = retriever.invoke(query)
-                if results:
-                    st.subheader("📌 Answer")
-                    st.write(results[0].page_content)
-                else:
-                    st.warning("No relevant information found.")
+            results = faiss_index.similarity_search(query, k=5)
+            if results:
+                st.subheader("Top matching document excerpts:")
+                for i, doc in enumerate(results, start=1):
+                    st.write(f"**Result {i}:** {doc.page_content}")
+            else:
+                st.info("No matching text found.")
         except Exception as e:
-            st.error(f"⚠️ Processing error: {e}")
-else:
-    st.info("Please upload a .txt or .pdf file to get started.")
+            st.error(f"Search error: {e}")
