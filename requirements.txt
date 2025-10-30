@@ -1,10 +1,11 @@
-# requirements.txt
 streamlit
 pdfplumber
 PyMuPDF
 easyocr
-langchain
-sentence-transformers
-faiss-cpu
-numpy
 Pillow
+numpy
+faiss-cpu
+langchain-community
+langchain-text-splitters
+langchain-huggingface
+sentence-transformers
