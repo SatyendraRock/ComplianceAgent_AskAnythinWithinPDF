@@ -1,56 +1,59 @@
 import streamlit as st
-import os
-import tempfile
+import io
+import numpy as np
+import fitz  # PyMuPDF
+import easyocr
+from PIL import Image
 from langchain_community.document_loaders import TextLoader
 from langchain_text_splitters import CharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
-from PyPDF2 import PdfReader
-import easyocr
-from pdf2image import convert_from_bytes
-from PIL import Image
-import io
+import pdfplumber
 
-# Streamlit UI
 st.set_page_config(page_title="AI Compliance Agent", layout="centered")
 st.title("🛡️ SATYENDRA AI Compliance Agent")
 st.write("Upload a .txt or .pdf file (even scanned PDFs) and ask questions about it!")
 
 uploaded_file = st.file_uploader("📄 Upload your document", type=["txt", "pdf"])
 
+# --- Extract text from text-based PDF ---
 def extract_text_from_pdf(file_bytes):
-    """Try to extract text directly from PDF (non-scanned)."""
     text = ""
     try:
-        reader = PdfReader(io.BytesIO(file_bytes))
-        for page in reader.pages:
-            text += page.extract_text() or ""
+        with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
+            for page in pdf.pages:
+                page_text = page.extract_text() or ""
+                text += page_text
     except Exception:
         pass
     return text.strip()
 
+# --- OCR for scanned PDF ---
 def extract_text_with_ocr(file_bytes):
-    """Extract text from scanned PDFs using EasyOCR."""
     st.info("🧠 Detected scanned PDF — running OCR (this may take a bit)...")
     text = ""
     try:
-        images = convert_from_bytes(file_bytes)  # Convert PDF pages to images
+        pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
         reader = easyocr.Reader(["en"], gpu=False)
-        for img in images:
+        for page_num in range(len(pdf_document)):
+            page = pdf_document.load_page(page_num)
+            pix = page.get_pixmap(dpi=200)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
             result = reader.readtext(np.array(img), detail=0)
             text += " ".join(result) + "\n"
     except Exception as e:
         st.error(f"OCR extraction failed: {e}")
     return text.strip()
 
+# --- Embed and index ---
 def process_text(text):
-    """Split and embed text into FAISS for retrieval."""
     splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     docs = splitter.create_documents([text])
     embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
     vectorstore = FAISS.from_documents(docs, embedding_model)
     return vectorstore.as_retriever()
 
+# --- Main logic ---
 if uploaded_file:
     file_bytes = uploaded_file.read()
     file_ext = uploaded_file.name.split(".")[-1].lower()
