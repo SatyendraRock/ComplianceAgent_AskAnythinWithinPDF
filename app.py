@@ -15,6 +15,7 @@ st.write("Upload a .txt or .pdf file (even scanned PDFs) and ask questions about
 
 uploaded_file = st.file_uploader("📄 Upload your document", type=["txt", "pdf"])
 
+# ----------- TEXT EXTRACTION ------------
 def extract_text_from_pdf(file_bytes):
     text = ""
     try:
@@ -42,21 +43,23 @@ def extract_text_with_ocr(file_bytes):
         st.error(f"OCR failed: {e}")
     return text.strip()
 
+# ----------- TEXT PROCESSING ------------
 def process_text(text):
     splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     docs = splitter.create_documents([text])
-    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     if not docs:
-        raise ValueError("No text chunks to embed.")
+        raise ValueError("No text chunks to embed. (File may be empty or OCR failed.)")
+
+    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
     vectorstore = FAISS.from_documents(docs, embedding_model)
     return vectorstore.as_retriever()
 
+# ----------- APP LOGIC ------------
 if uploaded_file:
     file_bytes = uploaded_file.read()
     file_ext = uploaded_file.name.split(".")[-1].lower()
 
     extracted_text = ""
-
     if file_ext == "txt":
         extracted_text = file_bytes.decode("utf-8", errors="ignore").strip()
     elif file_ext == "pdf":
