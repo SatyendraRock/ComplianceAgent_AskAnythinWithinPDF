@@ -1,14 +1,13 @@
 import streamlit as st
 import io
 import numpy as np
+from PIL import Image
 import fitz  # PyMuPDF
 import easyocr
-from PIL import Image
-from langchain_community.document_loaders import TextLoader
-from langchain_text_splitters import CharacterTextSplitter
-from langchain_community.embeddings import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS
 import pdfplumber
+from langchain_text_splitters import CharacterTextSplitter
+from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_community.vectorstores import FAISS
 
 st.set_page_config(page_title="AI Compliance Agent", layout="centered")
 st.title("🛡️ SATYENDRA AI Compliance Agent")
@@ -16,7 +15,6 @@ st.write("Upload a .txt or .pdf file (even scanned PDFs) and ask questions about
 
 uploaded_file = st.file_uploader("📄 Upload your document", type=["txt", "pdf"])
 
-# --- Extract text from text-based PDF ---
 def extract_text_from_pdf(file_bytes):
     text = ""
     try:
@@ -24,13 +22,12 @@ def extract_text_from_pdf(file_bytes):
             for page in pdf.pages:
                 page_text = page.extract_text() or ""
                 text += page_text
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"Text extraction failed: {e}")
     return text.strip()
 
-# --- OCR for scanned PDF ---
 def extract_text_with_ocr(file_bytes):
-    st.info("🧠 Detected scanned PDF — running OCR (this may take a bit)...")
+    st.info("🧠 Detected scanned PDF — running OCR (may take a minute)...")
     text = ""
     try:
         pdf_document = fitz.open(stream=file_bytes, filetype="pdf")
@@ -42,18 +39,18 @@ def extract_text_with_ocr(file_bytes):
             result = reader.readtext(np.array(img), detail=0)
             text += " ".join(result) + "\n"
     except Exception as e:
-        st.error(f"OCR extraction failed: {e}")
+        st.error(f"OCR failed: {e}")
     return text.strip()
 
-# --- Embed and index ---
 def process_text(text):
     splitter = CharacterTextSplitter(chunk_size=500, chunk_overlap=50)
     docs = splitter.create_documents([text])
-    embedding_model = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embedding_model = HuggingFaceEmbeddings(model_name="sentence-transformers/all-MiniLM-L6-v2")
+    if not docs:
+        raise ValueError("No text chunks to embed.")
     vectorstore = FAISS.from_documents(docs, embedding_model)
     return vectorstore.as_retriever()
 
-# --- Main logic ---
 if uploaded_file:
     file_bytes = uploaded_file.read()
     file_ext = uploaded_file.name.split(".")[-1].lower()
@@ -68,17 +65,19 @@ if uploaded_file:
             extracted_text = extract_text_with_ocr(file_bytes)
 
     if not extracted_text:
-        st.error("❌ Could not extract any text from the file. Try another document.")
+        st.error("❌ No readable text found in this file. Try uploading a different one.")
     else:
-        retriever = process_text(extracted_text)
-        query = st.text_input("💬 Ask a question about your document:")
-
-        if query:
-            results = retriever.invoke(query)
-            if results:
-                st.subheader("📌 Answer")
-                st.write(results[0].page_content)
-            else:
-                st.warning("No relevant content found.")
+        try:
+            retriever = process_text(extracted_text)
+            query = st.text_input("💬 Ask a question about your document:")
+            if query:
+                results = retriever.invoke(query)
+                if results:
+                    st.subheader("📌 Answer")
+                    st.write(results[0].page_content)
+                else:
+                    st.warning("No relevant information found.")
+        except Exception as e:
+            st.error(f"⚠️ Processing error: {e}")
 else:
     st.info("Please upload a .txt or .pdf file to get started.")
